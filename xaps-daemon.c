@@ -173,9 +173,9 @@ int xaps_register(const char *socket_path, struct xaps_attr *xaps_attr) {
     } else {
         str_append(req, "\tdovecot-mailboxes=(");
         int next = 0;
-        for (; !IMAP_ARG_IS_EOL(xaps_attr->mailboxes); xaps_attr->mailboxes++) {
+        for (int i = 0; !IMAP_ARG_IS_EOL(&xaps_attr->mailboxes[i]); i++) {
             const char *mailbox;
-            if (!imap_arg_get_astring(&(xaps_attr->mailboxes[0]), &mailbox)) {
+            if (!imap_arg_get_astring(&(xaps_attr->mailboxes[i]), &mailbox)) {
                 return -1;
             }
             if (next) {

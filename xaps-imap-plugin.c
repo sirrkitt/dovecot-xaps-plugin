@@ -163,7 +163,7 @@ static bool register_client(struct client_command_context *cmd, struct xaps_attr
     client_send_line(cmd->client,
                      t_strdup_printf("* XAPPLEPUSHSERVICE aps-version \"%s\" aps-topic \"%s\"", xaps_attr->aps_version,
                                      str_c(xaps_attr->aps_topic)));
-    client_send_tagline(cmd, "OK XAPPLEPUSHSERVICE Registration successful.");
+    client_send_tagline(cmd, "OK XAPPLEPUSHSERVICE completed.");
     return TRUE;
 }
 
