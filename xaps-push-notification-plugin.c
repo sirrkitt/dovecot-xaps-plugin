@@ -95,7 +95,10 @@ static void xaps_plugin_process_msg(struct push_notification_driver_txn *dtxn, s
     }
     const char *username = dtxn->ptxn->muser->username;
     if (user_lookup != NULL) {
-        username = mail_user_plugin_getenv(dtxn->ptxn->muser, user_lookup);
+        const char *lookup_username = mail_user_plugin_getenv(dtxn->ptxn->muser, user_lookup);
+        if (lookup_username != NULL) {
+            username = lookup_username;
+        }
     }
     if (xaps_notify(socket_path, username, dtxn->ptxn->muser, dtxn->ptxn->mbox, msg) != 0) {
         i_error("cannot notify");
