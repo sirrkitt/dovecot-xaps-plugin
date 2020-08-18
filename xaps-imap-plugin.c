@@ -30,6 +30,7 @@
 
 #include "xaps-imap-plugin.h"
 #include "xaps-daemon.h"
+#include "xaps-push-notification-plugin.h"
 
 const char *xapplepushservice_plugin_version = DOVECOT_ABI_VERSION;
 
@@ -69,7 +70,7 @@ static bool parse_xapplepush(struct client_command_context *cmd, struct xaps_att
     const struct imap_arg *args;
     const char *arg_key, *arg_val;
 
-    xaps_attr->dovecot_username = cmd->client->user->username;
+    xaps_attr->dovecot_username = get_real_mbox_user(cmd->client->user);
 
     if (!client_read_args(cmd, 0, 0, &args)) {
         client_send_command_error(cmd, "Invalid arguments.");

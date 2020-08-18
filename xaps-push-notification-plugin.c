@@ -81,6 +81,18 @@ static bool xaps_plugin_begin_txn(struct push_notification_driver_txn *dtxn) {
     return TRUE;
 }
 
+// get the real name for users who are actually an alias
+const char *get_real_mbox_user(struct mail_user *muser) {
+    const char *username = muser->username;
+    if (user_lookup != NULL) {
+        const char *userdb_username = mail_user_plugin_getenv(muser, user_lookup);
+        if (userdb_username != NULL) {
+            username = userdb_username;
+        }
+    }
+    return username;
+}
+
 /*
  * Process the actual message
  */
@@ -93,13 +105,7 @@ static void xaps_plugin_process_msg(struct push_notification_driver_txn *dtxn, s
                                            "Handling event: %s", (*event)->event->event->name);
         }
     }
-    const char *username = dtxn->ptxn->muser->username;
-    if (user_lookup != NULL) {
-        const char *lookup_username = mail_user_plugin_getenv(dtxn->ptxn->muser, user_lookup);
-        if (lookup_username != NULL) {
-            username = lookup_username;
-        }
-    }
+    const char *username = get_real_mbox_user(dtxn->ptxn->muser);
     if (xaps_notify(socket_path, username, dtxn->ptxn->muser, dtxn->ptxn->mbox, msg) != 0) {
         i_error("cannot notify");
     }
