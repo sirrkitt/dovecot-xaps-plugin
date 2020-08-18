@@ -37,8 +37,31 @@
 #include <mail-storage-private.h>
 #include <push-notification-txn-msg.h>
 
-#include "xaps-daemon.h"
+#include "xaps-utils.h"
 
+// get the real name for users who are actually an alias
+const char *get_real_mbox_user(struct mail_user *muser) {
+    const char *user_lookup = mail_user_plugin_getenv(muser, "xaps_user_lookup");
+    const char *username = muser->username;
+    if (user_lookup != NULL) {
+        const char *userdb_username = mail_user_plugin_getenv(muser, user_lookup);
+        if (userdb_username != NULL) {
+            username = userdb_username;
+        }
+    }
+    return username;
+}
+
+/**
+ * Quote and escape a string. Not sure if this deals correctly with
+ * unicode in mailbox names.
+ */
+
+static void xaps_str_append_quoted(string_t *dest, const char *str) {
+    str_append_c(dest, '"');
+    str_append(dest, str_escape(str));
+    str_append_c(dest, '"');
+}
 
 /*
  * Send the request to our daemon over a unix domain socket. The
@@ -94,17 +117,6 @@ int send_to_daemon(const char *socket_path, const string_t *payload, struct xaps
 
     net_disconnect(fd);
     return ret;
-}
-
-/**
- * Quote and escape a string. Not sure if this deals correctly with
- * unicode in mailbox names.
- */
-
-static void xaps_str_append_quoted(string_t *dest, const char *str) {
-    str_append_c(dest, '"');
-    str_append(dest, str_escape(str));
-    str_append_c(dest, '"');
 }
 
 /**

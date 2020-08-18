@@ -36,9 +36,11 @@
 #include <push-notification-txn-mbox.h>
 
 #include "xaps-push-notification-plugin.h"
-#include "xaps-daemon.h"
+#include "xaps-utils.h"
 
 const char *xaps_plugin_version = DOVECOT_ABI_VERSION;
+
+const char *socket_path;
 
 /*
  * Prepare message handling.
@@ -81,18 +83,6 @@ static bool xaps_plugin_begin_txn(struct push_notification_driver_txn *dtxn) {
     return TRUE;
 }
 
-// get the real name for users who are actually an alias
-const char *get_real_mbox_user(struct mail_user *muser) {
-    const char *username = muser->username;
-    if (user_lookup != NULL) {
-        const char *userdb_username = mail_user_plugin_getenv(muser, user_lookup);
-        if (userdb_username != NULL) {
-            username = userdb_username;
-        }
-    }
-    return username;
-}
-
 /*
  * Process the actual message
  */
@@ -126,7 +116,6 @@ int xaps_plugin_init(struct push_notification_driver_config *dconfig ATTR_UNUSED
     if (socket_path == NULL) {
         socket_path = DEFAULT_SOCKPATH;
     }
-    user_lookup = mail_user_plugin_getenv(muser, "xaps_user_lookup");
     return 0;
 }
 

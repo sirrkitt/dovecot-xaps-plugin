@@ -25,8 +25,8 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-add_library(lib25_xaps_push_notification_plugin MODULE xaps-daemon.c xaps-push-notification-plugin.c)
-add_library(lib25_xaps_imap_plugin MODULE xaps-daemon.c xaps-imap-plugin.c)
+add_library(lib25_xaps_push_notification_plugin MODULE xaps-utils.c xaps-push-notification-plugin.c)
+add_library(lib25_xaps_imap_plugin MODULE xaps-utils.c xaps-imap-plugin.c)
 
 target_link_libraries(lib25_xaps_push_notification_plugin ${LIBDOVECOT} ${LIBDOVECOTSTORAGE})
 target_link_libraries(lib25_xaps_imap_plugin ${LIBDOVECOT} ${LIBDOVECOTSTORAGE})

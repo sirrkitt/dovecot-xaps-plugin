@@ -29,13 +29,13 @@
 #include <imap-common.h>
 
 #include "xaps-imap-plugin.h"
-#include "xaps-daemon.h"
-#include "xaps-push-notification-plugin.h"
+#include "xaps-utils.h"
 
 const char *xapplepushservice_plugin_version = DOVECOT_ABI_VERSION;
 
 static struct module *xaps_imap_module;
 static imap_client_created_func_t *next_hook_client_created;
+const char *socket_path;
 
 /**
  * Command handler for the XAPPLEPUSHSERVICE command. The command is

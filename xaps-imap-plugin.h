@@ -29,7 +29,6 @@
 struct module;
 
 extern const char xaps_imap_plugin_binary_dependency[];
-const char *socket_path;
 
 void xaps_imap_plugin_init(struct module *module);
 
