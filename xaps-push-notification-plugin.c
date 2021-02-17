@@ -25,22 +25,19 @@
 
 #include <config.h>
 #include <lib.h>
-#include <push-notification-drivers.h>
+#include <mail-storage.h>
+#include <mail-storage-private.h>
 #include <push-notification-events.h>
+#include <push-notification-txn-mbox.h>
 #include <push-notification-txn-msg.h>
 #include <push-notification-event-messagenew.h>
 #include <push-notification-event-messageappend.h>
-#include <str.h>
-#include <mail-storage.h>
-#include <mail-storage-private.h>
-#include <push-notification-txn-mbox.h>
+#include <http-client-private.h>
 
 #include "xaps-push-notification-plugin.h"
 #include "xaps-utils.h"
 
 const char *xaps_plugin_version = DOVECOT_ABI_VERSION;
-
-const char *socket_path;
 
 /*
  * Prepare message handling.
@@ -83,23 +80,63 @@ static bool xaps_plugin_begin_txn(struct push_notification_driver_txn *dtxn) {
     return TRUE;
 }
 
-/*
- * Process the actual message
+
+/**
+ * Notify the backend daemon of an incoming mail. Right now we tell
+ * the daemon the username and the mailbox in which a new email was
+ * posted. The daemon can then lookup the user and see if any of the
+ * devices want to receive a notification for that mailbox.
  */
-static void xaps_plugin_process_msg(struct push_notification_driver_txn *dtxn, struct push_notification_txn_msg *msg) {
+static void xaps_notify(struct push_notification_driver_txn *dtxn, struct push_notification_txn_msg *msg) {
     struct push_notification_txn_event *const *event;
+    struct http_client_request *http_req;
+    string_t *str;
+    struct istream *payload;
+
+    xaps_init(dtxn->ptxn->muser, "/notify", dtxn->ptxn->pool);
+    i_assert(xaps_global != NULL);
+    i_assert(xaps_global->http_client != NULL);
+
+    http_req = http_client_request_url(
+            xaps_global->http_client, "POST", xaps_global->http_url,
+            push_notification_driver_xaps_http_callback, dtxn->duser->context);
+    http_client_request_set_event(http_req, dtxn->ptxn->event);
+    http_client_request_add_header(http_req, "Content-Type",
+                                   "application/json; charset=utf-8");
+
+    str = str_new(default_pool, 256);
+    str_append(str, "{\"Username\":\"");
+    json_append_escaped(str, get_real_mbox_user(dtxn->ptxn->muser));
+    str_append(str, "\",\"Mailbox\":\"");
+    json_append_escaped(str, msg->mailbox);
+    str_append(str, "\"");
 
     if (array_is_created(&msg->eventdata)) {
+        str_append(str, ",\"Events\": [");
+        int count = 0;
         array_foreach(&msg->eventdata, event) {
-            push_notification_driver_debug(XAPS_LOG_LABEL, dtxn->ptxn->muser,
-                                           "Handling event: %s", (*event)->event->event->name);
+            if (count) {
+                str_append(str, ",");
+            }
+            str_append(str, "\"");
+            json_append_escaped(str, (*event)->event->event->name);
+            str_append(str, "\"");
+            count++;
         }
+        str_append(str, "]");
     }
-    const char *username = get_real_mbox_user(dtxn->ptxn->muser);
-    if (xaps_notify(socket_path, username, dtxn->ptxn->muser, dtxn->ptxn->mbox, msg) != 0) {
-        i_error("cannot notify");
-    }
+    str_append(str, "}");
+
+    i_debug("Sending notification: %s", str_c(str));
+
+    payload = i_stream_create_from_data(str_data(str), str_len(str));
+    i_stream_add_destroy_callback(payload, str_free_i, str);
+    http_client_request_set_payload(http_req, payload, FALSE);
+
+    http_client_request_submit(http_req);
+    i_stream_unref(&payload);
 }
+
 
 // push-notification driver definition
 
@@ -107,28 +144,31 @@ const char *xaps_plugin_dependencies[] = { "push_notification", NULL };
 
 extern struct push_notification_driver push_notification_driver_xaps;
 
-int xaps_plugin_init(struct push_notification_driver_config *dconfig ATTR_UNUSED,
+int xaps_push_plugin_init(struct push_notification_driver_config *dconfig ATTR_UNUSED,
                  struct mail_user *muser,
                  pool_t pPool ATTR_UNUSED,
                  void **pVoid ATTR_UNUSED,
                  const char **pString ATTR_UNUSED) {
-    socket_path = mail_user_plugin_getenv(muser, "xaps_socket");
-    if (socket_path == NULL) {
-        socket_path = DEFAULT_SOCKPATH;
-    }
+//    xaps_init(muser, "/notify", pPool);
     return 0;
 }
 
-void xaps_plugin_deinit(struct push_notification_driver_user *duser ATTR_UNUSED) {
+void xaps_plugin_deinit(struct push_notification_driver_user *duser) {
+    push_notification_driver_xaps_deinit(duser);
+}
+
+void xaps_plugin_cleanup(void) {
+    push_notification_driver_xaps_cleanup();
 }
 
 struct push_notification_driver push_notification_driver_xaps = {
         .name = "xaps",
         .v = {
-                .init = xaps_plugin_init,
+                .init = xaps_push_plugin_init,
                 .begin_txn = xaps_plugin_begin_txn,
-                .process_msg = xaps_plugin_process_msg,
+                .process_msg = xaps_notify,
                 .deinit = xaps_plugin_deinit,
+                .cleanup = xaps_plugin_cleanup,
         }
 };
 

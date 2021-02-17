@@ -25,26 +25,31 @@
 
 #include <config.h>
 #include <lib.h>
-#include <net.h>
-#if (DOVECOT_VERSION_MAJOR > 2u || (DOVECOT_VERSION_MAJOR == 2u && DOVECOT_VERSION_MINOR >= 3u))
-#include <ostream-unix.h>
-#include <ostream.h>
-#endif
-#include <unistd.h>
-#include <push-notification-drivers.h>
-#include <imap-arg.h>
+#include <hash.h>
+#include <http-client.h>
+#include <http-url.h>
+#include <json-parser.h>
+#include <str.h>
 #include <strescape.h>
+#include <iostream-ssl.h>
 #include <mail-storage-private.h>
+
+#include <push-notification-plugin.h>
+#include <push-notification-drivers.h>
 #include <push-notification-txn-msg.h>
 
 #include "xaps-utils.h"
 
+#define DEFAULT_TIMEOUT_MSECS 5000
+#define DEFAULT_RETRY_COUNT 6
+
+struct xaps_config *xaps_global;
+
 // get the real name for users who are actually an alias
 const char *get_real_mbox_user(struct mail_user *muser) {
-    const char *user_lookup = mail_user_plugin_getenv(muser, "xaps_user_lookup");
     const char *username = muser->username;
-    if (user_lookup != NULL) {
-        const char *userdb_username = mail_user_plugin_getenv(muser, user_lookup);
+    if (xaps_global->user_lookup != NULL) {
+        const char *userdb_username = mail_user_plugin_getenv(muser, xaps_global->user_lookup);
         if (userdb_username != NULL) {
             username = userdb_username;
         }
@@ -52,153 +57,129 @@ const char *get_real_mbox_user(struct mail_user *muser) {
     return username;
 }
 
-/**
- * Quote and escape a string. Not sure if this deals correctly with
- * unicode in mailbox names.
- */
-
-static void xaps_str_append_quoted(string_t *dest, const char *str) {
-    str_append_c(dest, '"');
-    str_append(dest, str_escape(str));
-    str_append_c(dest, '"');
+/* Callback needed for i_stream_add_destroy_callback() in
+   push_notification_driver_ox_process_msg. */
+void str_free_i(string_t *str)
+{
+    str_free(&str);
 }
 
-/*
- * Send the request to our daemon over a unix domain socket. The
- * protocol is very simple line based. We use an alarm to make sure
- * this request does not hang.
- */
-int send_to_daemon(const char *socket_path, const string_t *payload, struct xaps_attr *xaps_attr) {
-    int ret = -1;
+void push_notification_driver_xaps_http_callback(const struct http_response *response, void *context) {
+    switch (response->status / 100) {
+        case 2:
+            // Success.
+            i_debug("Notification sent successfully: %s", http_response_get_message(response));
+            break;
 
-    int fd = net_connect_unix(socket_path);
-    if (fd == -1) {
-        i_error("net_connect_unix(%s) failed: %m", socket_path);
-        return -1;
+        default:
+            // Error.
+            i_error("Error when sending notification: %s", http_response_get_message(response));
+            break;
     }
+}
 
-    net_set_nonblock(fd, FALSE);
-    alarm(1);                     /* TODO: Should be a constant. What is a good duration? */
-#ifdef OSTREAM_UNIX_H
-    struct ostream *ostream = o_stream_create_unix(fd, (size_t)-1);
-    o_stream_cork(ostream);
-    o_stream_nsend(ostream, str_data(payload), str_len(payload));
-    o_stream_uncork(ostream);
-    {
-        if (o_stream_flush(ostream) < 1) {
-#else
-    {
-        if (net_transmit(fd, str_data(payload), str_len(payload)) < 0) {
-#endif
-            i_error("write(%s) failed: %m", socket_path);
-            ret = -1;
+static struct xaps_raw_config *xaps_parse_config(const char *p) {
+    const char **args, *key, *p2, *value;
+    struct xaps_raw_config *raw_config;
+
+    raw_config = t_new(struct xaps_raw_config, 1);
+    raw_config->raw_config = p;
+
+    hash_table_create(&raw_config->config, unsafe_data_stack_pool, 0,
+                      str_hash, strcmp);
+
+    if (p == NULL)
+        return raw_config;
+
+    args = t_strsplit_spaces(p, " ");
+
+    for (; *args != NULL; args++) {
+        p2 = strchr(*args, '=');
+        if (p2 != NULL) {
+            key = t_strdup_until(*args, p2);
+            value = t_strdup(p2 + 1);
         } else {
-            char res[1024];
-            ret = net_receive(fd, res, sizeof(res) - 1);
-            if (ret < 0) {
-                i_error("read(%s) failed: %m", socket_path);
-            } else {
-                res[ret] = '\0';
-                if (strncmp(res, "OK ", 3) == 0) {
-                    if (xaps_attr) {
-                        char *tmp;
-                        /* Remove whitespace the end. We expect \r\n. TODO: Looks shady. Is there a dovecot library function for this? */
-                        str_append(xaps_attr->aps_topic, strtok_r(&res[3], "\r\n", &tmp));
-                    }
-                    ret = 0;
-                }
-            }
+            key = *args;
+            value = "";
         }
+        hash_table_update(raw_config->config, key, value);
     }
-#ifdef OSTREAM_UNIX_H
-    o_stream_destroy(&ostream);
-#endif
-    alarm(0);
 
-    net_disconnect(fd);
-    return ret;
+    return raw_config;
 }
 
-/**
- * Notify the backend daemon of an incoming mail. Right now we tell
- * the daemon the username and the mailbox in which a new email was
- * posted. The daemon can then lookup the user and see if any of the
- * devices want to receive a notification for that mailbox.
- */
+void xaps_init(struct mail_user *muser, const char *http_path, pool_t pPool) {
+    const char *error, *tmp;
+    struct http_client_settings http_set;
+    struct ssl_iostream_settings ssl_set;
+    const char *xaps_config_string;
+    struct xaps_raw_config *config;
 
-int xaps_notify(const char *socket_path, const char *username, struct mail_user *mailuser , struct mailbox *mailbox, struct push_notification_txn_msg *msg) {
-    struct push_notification_txn_event *const *event;
-    /*
-     * Construct the request.
-     */
-    string_t *req = t_str_new(1024);
-    str_append(req, "NOTIFY");
-    str_append(req, " dovecot-username=");
-    xaps_str_append_quoted(req, username);
-    str_append(req, "\tdovecot-mailbox=");
-    xaps_str_append_quoted(req, mailbox->name);
-    if (array_is_created(&msg->eventdata)) {
-        str_append(req, "\tevents=(");
-        int count = 0;
-        array_foreach(&msg->eventdata, event) {
-            if (count) {
-                str_append(req, ",");
-            }
-            str_append(req, "\"");
-            str_append(req, (*event)->event->event->name);
-            str_append(req, "\"");
-            count++;
-        }
-        str_append(req, ")");
+    xaps_config_string = mail_user_plugin_getenv(muser, "xaps_config");
+    i_assert(xaps_config_string != NULL);
 
+    if (xaps_global == NULL) {
+        xaps_global = i_new(struct xaps_config, 1);
     }
-    str_append(req, "\r\n");
+
+    config = xaps_parse_config(xaps_config_string);
+
+    /* Valid config keys: url, user_lookup, max_retries, timeout_msecs */
+    tmp = hash_table_lookup(config->config, (const char *) "url");
+    i_assert(tmp != NULL);
+    
+
+    int ret = http_url_parse(tmp, NULL, HTTP_URL_ALLOW_USERINFO_PART, pPool,
+                       &xaps_global->http_url, &error);
+    xaps_global->http_url->path = http_path;
+    i_assert(ret == 0);
+
+    tmp = hash_table_lookup(config->config,(const char *) "user_lookup");
+    if (tmp != NULL) {
+        xaps_global->user_lookup = tmp;
+    }
 
 
-    push_notification_driver_debug(XAPS_LOG_LABEL, mailuser, "about to send: %p", req);
-    return send_to_daemon(socket_path, req, NULL);
+    tmp = hash_table_lookup(config->config, (const char *) "max_retries");
+    if ((tmp == NULL) ||
+        (str_to_uint(tmp, &xaps_global->http_max_retries) < 0)) {
+        xaps_global->http_max_retries = DEFAULT_RETRY_COUNT;
+    }
+    tmp = hash_table_lookup(config->config, (const char *) "timeout_msecs");
+    if ((tmp == NULL) ||
+        (str_to_uint(tmp, &xaps_global->http_timeout_msecs) < 0)) {
+        xaps_global->http_timeout_msecs = DEFAULT_TIMEOUT_MSECS;
+    }
+
+    if (xaps_global->http_client == NULL) {
+        /* This is going to use the first user's settings, but these are
+           unlikely to change between users so it shouldn't matter much.
+         */
+        i_zero(&http_set);
+        http_set.debug = muser->mail_debug;
+        http_set.max_attempts = xaps_global->http_max_retries + 1;
+        http_set.request_timeout_msecs = xaps_global->http_timeout_msecs;
+        i_zero(&ssl_set);
+        mail_user_init_ssl_client_settings(muser, &ssl_set);
+        http_set.ssl = &ssl_set;
+
+        xaps_global->http_client = http_client_init(&http_set);
+    }
 }
 
-/**
- * Send a registration request to the daemon, which will do all the
- * hard work.
- */
-int xaps_register(const char *socket_path, struct xaps_attr *xaps_attr) {
-    /*
-     * Construct our request.
-     */
-
-    string_t *req = t_str_new(1024);
-    str_append(req, "REGISTER");
-    str_append(req, " aps-account-id=");
-    xaps_str_append_quoted(req, xaps_attr->aps_account_id);
-    str_append(req, "\taps-device-token=");
-    xaps_str_append_quoted(req, xaps_attr->aps_device_token);
-    str_append(req, "\taps-subtopic=");
-    xaps_str_append_quoted(req, xaps_attr->aps_subtopic);
-    str_append(req, "\tdovecot-username=");
-    xaps_str_append_quoted(req, xaps_attr->dovecot_username);
-    str_append(req, "");
-
-    if (xaps_attr->mailboxes == NULL) {
-        str_append(req, "\tdovecot-mailboxes=(\"INBOX\")");
-    } else {
-        str_append(req, "\tdovecot-mailboxes=(");
-        int next = 0;
-        for (int i = 0; !IMAP_ARG_IS_EOL(&xaps_attr->mailboxes[i]); i++) {
-            const char *mailbox;
-            if (!imap_arg_get_astring(&(xaps_attr->mailboxes[i]), &mailbox)) {
-                return -1;
-            }
-            if (next) {
-                str_append(req, ",");
-            }
-            xaps_str_append_quoted(req, mailbox);
-            next = 1;
-        }
-        str_append(req, ")");
+void push_notification_driver_xaps_deinit(struct push_notification_driver_user *duser ATTR_UNUSED) {
+    if (xaps_global != NULL) {
+        if (xaps_global->http_client != NULL)
+            http_client_wait(xaps_global->http_client);
     }
-    str_append(req, "\r\n");
+}
 
-    return send_to_daemon(socket_path, req, xaps_attr);
+void push_notification_driver_xaps_cleanup(void)
+{
+    if (xaps_global != NULL) {
+        if (xaps_global->http_client != NULL) {
+            http_client_deinit(&xaps_global->http_client);
+        }
+        i_free_and_null(xaps_global);
+    }
 }

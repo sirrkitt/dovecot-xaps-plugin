@@ -27,6 +27,7 @@
 #include <lib.h>
 #include <str.h>
 #include <imap-common.h>
+#include <http-client-private.h>
 
 #include "xaps-imap-plugin.h"
 #include "xaps-utils.h"
@@ -35,7 +36,6 @@ const char *xapplepushservice_plugin_version = DOVECOT_ABI_VERSION;
 
 static struct module *xaps_imap_module;
 static imap_client_created_func_t *next_hook_client_created;
-const char *socket_path;
 
 /**
  * Command handler for the XAPPLEPUSHSERVICE command. The command is
@@ -70,6 +70,7 @@ static bool parse_xapplepush(struct client_command_context *cmd, struct xaps_att
     const struct imap_arg *args;
     const char *arg_key, *arg_val;
 
+    i_assert(xaps_attr != NULL);
     xaps_attr->dovecot_username = get_real_mbox_user(cmd->client->user);
 
     if (!client_read_args(cmd, 0, 0, &args)) {
@@ -141,6 +142,69 @@ static bool parse_xapplepush(struct client_command_context *cmd, struct xaps_att
     return TRUE;
 }
 
+
+/**
+ * Send a registration request to the daemon, which will do all the
+ * hard work.
+ */
+int xaps_register(struct client_command_context *cmd, struct xaps_attr *xaps_attr) {
+    struct http_client_request *http_req;
+    struct istream *payload;
+    string_t *str;
+
+    i_assert(xaps_global != NULL);
+    i_assert(xaps_global->http_client != NULL);
+
+    http_req = http_client_request_url(
+            xaps_global->http_client, "POST", xaps_global->http_url,
+            push_notification_driver_xaps_http_callback, cmd->context);
+    http_client_request_add_header(http_req, "Content-Type",
+                                   "application/json; charset=utf-8");
+
+    str = str_new(default_pool, 256);
+    str_append(str, "{\"ApsAccountId\":\"");
+    json_append_escaped(str, xaps_attr->aps_account_id);
+    str_append(str, "\",\"ApsDeviceToken\":\"");
+    json_append_escaped(str, xaps_attr->aps_device_token);
+    str_append(str, "\",\"ApsSubtopic\":\"");
+    json_append_escaped(str, xaps_attr->aps_subtopic);
+    str_append(str, "\",\"Username\":\"");
+    json_append_escaped(str, xaps_attr->dovecot_username);
+
+    if (xaps_attr->mailboxes == NULL) {
+        str_append(str, "\",\"Mailboxes\": [\"INBOX\"]");
+    } else {
+        str_append(str, "\",\"Mailboxes\": [");
+        int first = 1;
+        for (int i = 0; !IMAP_ARG_IS_EOL(&xaps_attr->mailboxes[i]); i++) {
+            const char *mailbox;
+            if (!imap_arg_get_astring(&(xaps_attr->mailboxes[i]), &mailbox)) {
+                return -1;
+            }
+            if (!first) {
+                str_append(str, ",");
+            }
+            str_append(str, "\"");
+            json_append_escaped(str, mailbox);
+            str_append(str, "\"");
+            first = 0;
+        }
+        str_append(str, "]");
+    }
+    str_append(str, "}");
+
+    i_debug("Sending registration: %s", str_c(str));
+
+    payload = i_stream_create_from_data(str_data(str), str_len(str));
+    i_stream_add_destroy_callback(payload, str_free_i, str);
+    http_client_request_set_payload(http_req, payload, FALSE);
+
+    http_client_request_submit(http_req);
+    i_stream_unref(&payload);
+
+    return 0;
+}
+
 /*
  * Register the client at the xapsd
  */
@@ -151,7 +215,7 @@ static bool register_client(struct client_command_context *cmd, struct xaps_attr
     */
     xaps_attr->aps_topic = t_str_new(0);
 
-    if (xaps_register(socket_path, xaps_attr) != 0) {
+    if (xaps_register(cmd, xaps_attr) != 0) {
         client_send_command_error(cmd, "Registration failed.");
         return FALSE;
     }
@@ -174,12 +238,14 @@ static bool register_client(struct client_command_context *cmd, struct xaps_attr
 static bool cmd_xapplepushservice(struct client_command_context *cmd) {
     struct xaps_attr xaps_attr;
 
+    xaps_init(cmd->client->user, "/register", cmd->pool);
     if (!parse_xapplepush(cmd, &xaps_attr)) {
         return FALSE;
     }
     if (!register_client(cmd, &xaps_attr)) {
         return FALSE;
     }
+
     return TRUE;
 }
 
@@ -193,10 +259,6 @@ static bool cmd_xapplepushservice(struct client_command_context *cmd) {
 static void xaps_client_created(struct client **client) {
     if (mail_user_is_plugin_loaded((*client)->user, xaps_imap_module)) {
         str_append((*client)->capability_string, " XAPPLEPUSHSERVICE");
-    }
-    socket_path = mail_user_plugin_getenv((*client)->user, "xaps_socket");
-    if (socket_path == NULL) {
-        socket_path = DEFAULT_SOCKPATH;
     }
 
     if (next_hook_client_created != NULL) {
@@ -214,7 +276,6 @@ static void xaps_client_created(struct client **client) {
 
 void xaps_imap_plugin_init(struct module *module) {
     command_register("XAPPLEPUSHSERVICE", cmd_xapplepushservice, 0);
-
     xaps_imap_module = module;
     next_hook_client_created = imap_client_created_hook_set(xaps_client_created);
 }
@@ -228,10 +289,9 @@ void xaps_imap_plugin_init(struct module *module) {
 
 void xaps_imap_plugin_deinit(void) {
     imap_client_created_hook_set(next_hook_client_created);
-
     command_unregister("XAPPLEPUSHSERVICE");
+    push_notification_driver_xaps_cleanup();
 }
-
 
 /**
  * This plugin only makes sense in the context of IMAP.

@@ -24,26 +24,46 @@
  */
 
 #include <lib.h>
+#include <http-client.h>
+#include <istream.h>
+#include <json-parser.h>
 #include <str.h>
+#include <push-notification-drivers.h>
 #include <push-notification-events.h>
 
 #ifndef DOVECOT_XAPS_PLUGIN_XAPS_H
 #define DOVECOT_XAPS_PLUGIN_XAPS_H
 
 #define XAPS_LOG_LABEL "XAPS Push Notification: "
-#define DEFAULT_SOCKPATH "/var/run/dovecot/xapsd.sock"
 
 const char *get_real_mbox_user(struct mail_user *muser);
 
-struct xaps_attr {
-    const char *aps_version, *aps_account_id, *aps_device_token, *aps_subtopic;
-    const struct imap_arg *mailboxes;
-    const char *dovecot_username;
-    string_t *aps_topic;
+HASH_TABLE_DEFINE_TYPE(xaps_config, const char *, const char *);
+
+struct xaps_raw_config {
+    HASH_TABLE_TYPE(xaps_config) config;
+    const char *raw_config;
 };
 
-int send_to_daemon(const char *socket_path, const string_t *payload, struct xaps_attr *xaps_attr);
-int xaps_notify(const char *socket_path, const char *username, struct mail_user *mailuser, struct mailbox *mailbox, struct push_notification_txn_msg *msg);
-int xaps_register(const char *socket_path, struct xaps_attr *xaps_attr);
+/* This is data that is shared by all plugin users. */
+struct xaps_config {
+    struct http_url *http_url;
+    struct http_client *http_client;
+    const char *user_lookup;
+    unsigned int http_max_retries;
+    unsigned int http_timeout_msecs;
+};
+
+extern struct xaps_config *xaps_global;
+
+void str_free_i(string_t *str);
+
+void push_notification_driver_xaps_http_callback(const struct http_response *response, void *context);
+
+void xaps_init(struct mail_user *muser, const char *http_path, pool_t pPool);
+
+void push_notification_driver_xaps_deinit(struct push_notification_driver_user *duser ATTR_UNUSED);
+
+void push_notification_driver_xaps_cleanup(void);
 
 #endif
