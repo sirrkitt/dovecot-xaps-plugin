@@ -52,13 +52,12 @@ struct xaps_config {
     const char *user_lookup;
     unsigned int http_max_retries;
     unsigned int http_timeout_msecs;
+    const unsigned char *aps_topic;
 };
 
 extern struct xaps_config *xaps_global;
 
 void str_free_i(string_t *str);
-
-void push_notification_driver_xaps_http_callback(const struct http_response *response, void *context);
 
 void xaps_init(struct mail_user *muser, const char *http_path, pool_t pPool);
 

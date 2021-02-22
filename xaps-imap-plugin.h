@@ -32,9 +32,9 @@ struct xaps_attr {
     const char *aps_version, *aps_account_id, *aps_device_token, *aps_subtopic;
     const struct imap_arg *mailboxes;
     const char *dovecot_username;
-    string_t *aps_topic;
 };
 
+void xaps_register_callback(const struct http_response *response, void *context);
 extern const char xaps_imap_plugin_binary_dependency[];
 void xaps_imap_plugin_init(struct module *module);
 void xaps_imap_plugin_deinit(void);

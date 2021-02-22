@@ -28,6 +28,7 @@
 
 struct module;
 
+void push_notification_driver_xaps_http_callback(const struct http_response *response, void *context);
 extern const char *xaps_plugin_dependencies[];
 void xaps_push_notification_plugin_init(struct module *module);
 void xaps_push_notification_plugin_deinit(void);

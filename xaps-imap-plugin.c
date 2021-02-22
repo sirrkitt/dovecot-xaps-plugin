@@ -142,7 +142,6 @@ static bool parse_xapplepush(struct client_command_context *cmd, struct xaps_att
     return TRUE;
 }
 
-
 /**
  * Send a registration request to the daemon, which will do all the
  * hard work.
@@ -157,7 +156,7 @@ int xaps_register(struct client_command_context *cmd, struct xaps_attr *xaps_att
 
     http_req = http_client_request_url(
             xaps_global->http_client, "POST", xaps_global->http_url,
-            push_notification_driver_xaps_http_callback, cmd->context);
+            xaps_register_callback, cmd->context);
     http_client_request_add_header(http_req, "Content-Type",
                                    "application/json; charset=utf-8");
 
@@ -213,21 +212,24 @@ static bool register_client(struct client_command_context *cmd, struct xaps_attr
     * Forward to the helper daemon. The helper will return the
     * aps-topic, which in reality is the subject of the certificate.
     */
-    xaps_attr->aps_topic = t_str_new(0);
-
     if (xaps_register(cmd, xaps_attr) != 0) {
         client_send_command_error(cmd, "Registration failed.");
         return FALSE;
     }
 
     /*
+     * Dovecot only supports asynchronous http calls. So we wait for the http call to complete and write the
+     * aps-topic into the xaps_global struct.
+     */
+    http_client_wait(xaps_global->http_client);
+
+    /*
      * Return success. We assume that aps_version and aps_topic do not
      * contain anything that needs to be escaped.
      */
-
     client_send_line(cmd->client,
                      t_strdup_printf("* XAPPLEPUSHSERVICE aps-version \"%s\" aps-topic \"%s\"", xaps_attr->aps_version,
-                                     str_c(xaps_attr->aps_topic)));
+                                     xaps_global->aps_topic));
     client_send_tagline(cmd, "OK XAPPLEPUSHSERVICE completed.");
     return TRUE;
 }
@@ -247,6 +249,28 @@ static bool cmd_xapplepushservice(struct client_command_context *cmd) {
     }
 
     return TRUE;
+}
+
+
+/**
+ * HTTP callback function for /register call
+ */
+void xaps_register_callback(const struct http_response *response, void *context) {
+    size_t size;
+
+    switch (response->status / 100) {
+        case 2:
+            // Success.
+            i_debug("Notification sent successfully: %s", http_response_get_message(response));
+            i_stream_read_data(response->payload, &xaps_global->aps_topic, &size, 128);
+            i_assert(size > 50);
+            break;
+
+        default:
+            // Error.
+            i_error("Error when sending notification: %s", http_response_get_message(response));
+            break;
+    }
 }
 
 /**

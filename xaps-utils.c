@@ -64,19 +64,7 @@ void str_free_i(string_t *str)
     str_free(&str);
 }
 
-void push_notification_driver_xaps_http_callback(const struct http_response *response, void *context) {
-    switch (response->status / 100) {
-        case 2:
-            // Success.
-            i_debug("Notification sent successfully: %s", http_response_get_message(response));
-            break;
 
-        default:
-            // Error.
-            i_error("Error when sending notification: %s", http_response_get_message(response));
-            break;
-    }
-}
 
 static struct xaps_raw_config *xaps_parse_config(const char *p) {
     const char **args, *key, *p2, *value;
@@ -127,7 +115,7 @@ void xaps_init(struct mail_user *muser, const char *http_path, pool_t pPool) {
     /* Valid config keys: url, user_lookup, max_retries, timeout_msecs */
     tmp = hash_table_lookup(config->config, (const char *) "url");
     i_assert(tmp != NULL);
-    
+
 
     int ret = http_url_parse(tmp, NULL, HTTP_URL_ALLOW_USERINFO_PART, pPool,
                        &xaps_global->http_url, &error);
