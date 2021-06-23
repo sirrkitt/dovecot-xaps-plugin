@@ -145,8 +145,12 @@ void push_notification_driver_xaps_http_callback(const struct http_response *res
             break;
 
         default:
-            // Error.
-            i_error("Error when sending notification: %s", http_response_get_message(response));
+            if (response->status == 404) {
+                i_debug("Notification sent successfully, but no registered device found: %s", http_response_get_message(response));
+            } else {
+                // Error.
+                i_error("Error when sending notification: %s", http_response_get_message(response));
+            }
             break;
     }
 }
