@@ -144,7 +144,6 @@ void xaps_init(struct mail_user *muser, const char *http_path, pool_t pPool) {
            unlikely to change between users so it shouldn't matter much.
          */
         i_zero(&http_set);
-        http_set.debug = muser->mail_debug;
         http_set.max_attempts = xaps_global->http_max_retries + 1;
         http_set.request_timeout_msecs = xaps_global->http_timeout_msecs;
         i_zero(&ssl_set);
