@@ -147,8 +147,7 @@ void xaps_init(struct mail_user *muser, const char *http_path, pool_t pPool) {
         http_set.max_attempts = xaps_global->http_max_retries + 1;
         http_set.request_timeout_msecs = xaps_global->http_timeout_msecs;
         i_zero(&ssl_set);
-        mail_user_init_ssl_client_settings(muser, &ssl_set);
-        http_set.ssl = &ssl_set;
+        http_set.ssl = muser->ssl_set;
 
         xaps_global->http_client = http_client_init(&http_set);
     }
