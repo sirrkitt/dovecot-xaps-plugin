@@ -63,7 +63,7 @@ static bool xaps_plugin_begin_txn(struct push_notification_driver_txn *dtxn) {
                             PUSH_NOTIFICATION_MESSAGE_HDR_TO |
                             PUSH_NOTIFICATION_MESSAGE_HDR_SUBJECT |
                             PUSH_NOTIFICATION_MESSAGE_BODY_SNIPPET;
-            push_notification_event_init(dtxn, "MessageNew", eventMessagenewConfig);
+            push_notification_event_init(dtxn, "MessageNew", eventMessagenewConfig, NULL);
         } else if (strcmp((*event)->name,"MessageAppend") == 0) {
             eventMessageappendConfig = p_new(dtxn->ptxn->pool, struct push_notification_event_messageappend_config, 1);
             // Take what you can, give nothing back
@@ -72,9 +72,9 @@ static bool xaps_plugin_begin_txn(struct push_notification_driver_txn *dtxn) {
                             PUSH_NOTIFICATION_MESSAGE_HDR_TO |
                             PUSH_NOTIFICATION_MESSAGE_HDR_SUBJECT |
                             PUSH_NOTIFICATION_MESSAGE_BODY_SNIPPET;
-            push_notification_event_init(dtxn, "MessageAppend", eventMessageappendConfig);
+            push_notification_event_init(dtxn, "MessageAppend", eventMessageappendConfig, NULL);
         } else {
-            push_notification_event_init(dtxn, (*event)->name, NULL);
+            push_notification_event_init(dtxn, (*event)->name, NULL, NULL);
         }
     }
     return TRUE;
